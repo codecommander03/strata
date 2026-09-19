@@ -14,6 +14,7 @@
 #include "strata/sql/session.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <sstream>

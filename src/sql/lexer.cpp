@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <charconv>
+#include <cstdlib>
 #include <unordered_map>
 
 namespace strata::sql {

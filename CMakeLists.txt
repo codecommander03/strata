@@ -47,7 +47,10 @@ target_link_libraries(strata_slt PRIVATE strata_core)
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-find_package(GTest CONFIG REQUIRED)
+# Module mode, not CONFIG: it finds vcpkg's config package when there is one
+# and apt's installation when there is not. CONFIG alone fails on a distro
+# that ships GoogleTest without a CMake config file.
+find_package(GTest REQUIRED)
 enable_testing()
 
 add_executable(strata_tests
@@ -74,10 +77,34 @@ gtest_discover_tests(strata_tests)
 
 # ---------------------------------------------------------------------------
 # Benchmarks — strata against SQLite, same machine, same durability settings.
+#
+# Optional, and deliberately so. The engine and its tests need nothing but
+# GoogleTest; SQLite and Google Benchmark exist only to produce the numbers in
+# BENCHMARKS.md. A platform that has the compiler but not those two should
+# still build and test the database, which is the whole job of the Linux CI
+# lane — catching code that only compiles under MSVC.
 # ---------------------------------------------------------------------------
-find_package(benchmark CONFIG REQUIRED)
-find_package(unofficial-sqlite3 CONFIG REQUIRED)
+find_package(benchmark CONFIG QUIET)
 
-add_executable(strata_bench bench/storage_bench.cpp)
-target_link_libraries(strata_bench
-    PRIVATE strata_core benchmark::benchmark unofficial::sqlite3::sqlite3)
+# vcpkg exports SQLite as `unofficial-sqlite3`; everywhere else it is CMake's
+# own FindSQLite3 module. Try the vcpkg spelling, then the standard one.
+find_package(unofficial-sqlite3 CONFIG QUIET)
+if(TARGET unofficial::sqlite3::sqlite3)
+    set(STRATA_SQLITE_TARGET unofficial::sqlite3::sqlite3)
+else()
+    find_package(SQLite3 QUIET)
+    if(TARGET SQLite3::SQLite3)
+        set(STRATA_SQLITE_TARGET SQLite3::SQLite3)
+    endif()
+endif()
+
+if(TARGET benchmark::benchmark AND DEFINED STRATA_SQLITE_TARGET)
+    add_executable(strata_bench bench/storage_bench.cpp)
+    target_link_libraries(strata_bench
+        PRIVATE strata_core benchmark::benchmark ${STRATA_SQLITE_TARGET})
+    message(STATUS "strata: benchmarks enabled (SQLite via ${STRATA_SQLITE_TARGET})")
+else()
+    message(STATUS
+        "strata: benchmarks skipped — needs Google Benchmark and SQLite. "
+        "The engine and its tests do not.")
+endif()

@@ -13,6 +13,7 @@
 #include "strata/sql/parser.hpp"
 #include "strata/sql/session.hpp"
 
+#include <cstdio>
 #include <memory>
 #include <sstream>
 #include <string>
