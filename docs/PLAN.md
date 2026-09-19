@@ -99,11 +99,9 @@ transactions interleaving live.
 Every visitor runs their own copy of the database in their own tab, so the
 hosting is a static page and there is no server to pay for or to scale.
 
-**Gate** — [~] **PARTIALLY PASSED 2026-09-19.** The engine compiles to
-WebAssembly, the page works, and a query runs with no backend — verified in a
-browser against a local static server. What is *not* done is the public URL:
-deploying needs an account that only the owner can create. The gate stays open
-until that link exists. Evidence below.
+**Gate** — [x] **PASSED 2026-09-20.** Live at
+<https://codecommander03.github.io/strata/>. A stranger opens it, runs a query
+and sees a result, with no account, no install and no backend. Evidence below.
 
 ---
 
@@ -370,11 +368,21 @@ syntax error surfaces with its `line:column`. `ROLLBACK` really rolls back and
 hold through the WebAssembly boundary, which is the only thing this stage
 needed to prove about them.
 
-**What is missing: the URL.** Publishing needs a Cloudflare Pages or GitHub
-Pages account, which is the owner's to create. The deployment is a folder of
-five static files with no build command and no backend, so it is a drag and
-drop — but until the link exists a stranger cannot open it, and the gate says a
-stranger can. It stays open.
+**Deployed 2026-09-20.** `.github/workflows/pages.yml` publishes `web/` on
+every push. Verified on the live URL rather than assumed: `application/wasm` is
+served with the right content type so the module streams, the engine
+instantiates, and all four guarantees hold in a browser over HTTPS — an
+`IndexScan` seek returns one row, `ROLLBACK` restores the old value,
+`WHERE x = NULL` returns nothing, and a syntax error still reports `1:24`.
+
+Getting there cost two wrong turns worth recording. `enablement: true` on
+`actions/configure-pages` does not let a workflow create a Pages site:
+creating one needs repository admin and `GITHUB_TOKEN` does not have it
+(`Resource not accessible by integration`). And GitHub now requires a sign-in
+to read Actions logs even on a public repository, so the first failure was
+diagnosed from surrounding evidence, wrongly, before the run page was read in
+a browser and gave the actual error. Enabling Pages is one switch in Settings
+that no automation on this side could flip.
 
 **A false lesson, removed.** The playground originally shipped an example
 captioned "run this twice and compare *loaded* in the Pages tab", implying the

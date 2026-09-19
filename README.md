@@ -13,6 +13,12 @@
   <img alt="sqllogictest" src="https://img.shields.io/badge/sqllogictest-163%2F163-2ea44f">
   <img alt="WebAssembly" src="https://img.shields.io/badge/wasm-343%20KB-654FF0?logo=webassembly&logoColor=white">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
+  <a href="https://codecommander03.github.io/strata/"><img alt="live demo" src="https://img.shields.io/badge/demo-live-2ea44f"></a>
+</p>
+
+<p align="center">
+  <b><a href="https://codecommander03.github.io/strata/">▸ Try it in your browser</a></b>
+  — the whole database, running in your tab, with no backend.
 </p>
 
 <p align="center">
@@ -44,9 +50,9 @@ acknowledged write came back.
 It is about 9,600 lines of C++ with no database dependencies — the B+tree, the
 pager, the write-ahead log, the parser and the executor are all here.
 
-> **Status: 6½ of 7 stages complete.** Everything below works and is tested.
-> The half is a public URL for the playground — it builds and runs, it just
-> isn't deployed yet.
+> **Status: all 7 stages complete.** Everything below works, is tested, and
+> is deployed. Stage 4 carries a stated caveat about the sqllogictest corpus —
+> [read it](#sqllogictest--sql), because it matters.
 
 ---
 
@@ -204,10 +210,11 @@ PS> .\scripts\build_wasm.ps1 -Serve
   total         351,147 bytes (343 KB)
 ```
 
-The playground in the screenshot above is a folder of five static files. **No
-backend, no build step, nothing to pay for** — every visitor downloads 343 KB
-once and runs their own database in their own tab. It shows the query plan, the
-token stream, and how many pages each query touched.
+It is live at **<https://codecommander03.github.io/strata/>** — a folder of
+five static files. **No backend, no build step, nothing to pay for**: every
+visitor downloads 343 KB once and runs their own database in their own tab, so
+there is no server and no traffic spike that can cost anything. It shows the
+query plan, the token stream, and how many pages each query touched.
 
 First run needs the Emscripten SDK, which is free and needs no account:
 
