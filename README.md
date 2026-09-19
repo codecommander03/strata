@@ -217,7 +217,9 @@ cd C:\emsdk; .\emsdk.bat install latest; .\emsdk.bat activate latest
 ```
 
 `.github/workflows/pages.yml` publishes `web/` to GitHub Pages on every push
-to `main`, and turns Pages on itself the first time it runs. The WebAssembly artifacts are committed rather than built in CI, so
+to `main`. Pages has to be switched on once by hand first — *Settings →
+Pages → Source: GitHub Actions* — because creating a Pages site needs
+repository admin rights and a workflow token does not have them. The WebAssembly artifacts are committed rather than built in CI, so
 that workflow **warns when `src/` or `include/` changed without
 `web/strata.wasm` changing with them** — the case where the deployed page
 would quietly serve an engine older than the source beside it. It warns rather

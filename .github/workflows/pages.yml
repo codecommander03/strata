@@ -41,7 +41,7 @@ jobs:
     name: Warn if the committed wasm may be stale
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 2
 
@@ -81,15 +81,22 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      # `enablement` turns Pages on for the repository the first time this
-      # runs, so there is no manual step in Settings. Without it the action
-      # fails on a repository that has never had a Pages site, which is what
-      # happened on the first attempt.
+      # Pages must be switched on once, by hand, before this can work:
+      #   Settings -> Pages -> Build and deployment -> Source: GitHub Actions
+      #
+      # `enablement: true` was tried and does not help. Creating a Pages site
+      # needs repository admin rights, and GITHUB_TOKEN does not have them
+      # however its permissions are declared:
+      #
+      #   Create Pages site failed.
+      #   Error: Resource not accessible by integration
+      #
+      # So the action is left to find a site that already exists. Until
+      # somebody flips that switch, this job fails with "Get Pages site
+      # failed: Not Found", which is the correct thing for it to do.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Upload web/
         uses: actions/upload-pages-artifact@v3
