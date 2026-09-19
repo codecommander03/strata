@@ -1,0 +1,75 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows / MSVC
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # vcpkg ships with the GitHub runners; caching the built packages is the
+      # difference between a two-minute job and a fifteen-minute one.
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg_installed
+            C:/vcpkg/buildtrees
+            C:/vcpkg/packages
+            C:/vcpkg/downloads
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ runner.os }}-
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=x64-windows
+
+      - name: Build
+        run: cmake --build build --config Debug
+
+      - name: Test
+        run: ./build/Debug/strata_tests.exe
+
+      - name: sqllogictest corpus
+        run: ./build/Debug/strata_slt.exe testdata/select1.test testdata/nulls.test testdata/dml.test testdata/transactions.test
+
+      # The real gate for the storage engine: kill the writer mid-transaction
+      # and prove every acknowledged write came back. Fewer kills than a local
+      # run so the job stays short.
+      - name: Crash recovery
+        shell: pwsh
+        run: ./scripts/chaos.ps1 -Kills 8 -Keys 20000 -Batch 200
+
+  linux:
+    name: Linux / GCC
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtest-dev libbenchmark-dev libsqlite3-dev cmake ninja-build
+
+      # MSVC is the primary target; this job exists to stop the code drifting
+      # into anything that only compiles on Windows. The chaos harness is
+      # PowerShell and does not run here.
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ./build/strata_tests

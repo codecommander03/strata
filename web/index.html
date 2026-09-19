@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>strata — a database in your browser</title>
+<meta name="description" content="A transactional SQL database written from scratch in C++20, compiled to WebAssembly. Every visitor runs their own copy.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>▤</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>strata</h1>
+  <p class="tagline">
+    A transactional SQL database written from scratch in C++20 — pages, B+tree,
+    write-ahead log, MVCC — compiled to WebAssembly.
+    <strong>This page has no backend.</strong> The engine is running in your tab,
+    on your machine, and the database disappears when you close it.
+  </p>
+</header>
+
+<main>
+  <aside id="sidebar">
+    <h2>Schema</h2>
+    <div id="schema" class="schema"><p class="muted">No tables yet.</p></div>
+
+    <h2>Try</h2>
+    <div id="examples" class="examples"></div>
+
+    <h2>About</h2>
+    <p class="muted small">
+      Storage engine survives <code>kill -9</code>; isolation is judged by the
+      Hermitage suite; SQL by a sqllogictest harness. Numbers and caveats in the
+      <a href="https://github.com/codecommander03/strata" target="_blank" rel="noopener">README</a>.
+    </p>
+  </aside>
+
+  <section id="workspace">
+    <div class="editor-wrap">
+      <textarea id="sql" spellcheck="false" aria-label="SQL editor"
+        placeholder="SELECT 1 + 1;"></textarea>
+      <div class="editor-bar">
+        <button id="run" class="primary">Run <kbd>Ctrl</kbd>+<kbd>Enter</kbd></button>
+        <button id="reset">Reset database</button>
+        <span id="status" class="status" role="status" aria-live="polite">loading…</span>
+      </div>
+    </div>
+
+    <div id="output">
+      <div id="error" class="error" hidden></div>
+      <div id="result"></div>
+    </div>
+
+    <div class="panels">
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-panel="plan" role="tab">Query plan</button>
+        <button class="tab" data-panel="tokens" role="tab">Tokens</button>
+        <button class="tab" data-panel="stats" role="tab">Pages</button>
+      </nav>
+      <div class="panel active" id="panel-plan"><pre class="muted">Run a query.</pre></div>
+      <div class="panel" id="panel-tokens"><pre class="muted">Run a query.</pre></div>
+      <div class="panel" id="panel-stats"><pre class="muted">Run a query.</pre></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>strata</span> · storage engine, transactions, SQL · C++20 → WebAssembly ·
+  <a href="https://github.com/codecommander03/strata" target="_blank" rel="noopener">source</a>
+</footer>
+
+<script src="strata.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

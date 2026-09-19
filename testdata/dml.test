@@ -1,0 +1,142 @@
+# INSERT, UPDATE, DELETE, and the type affinity that decides what gets stored.
+
+statement ok
+CREATE TABLE p(id INTEGER, name TEXT, price REAL)
+
+statement ok
+INSERT INTO p VALUES (1, 'widget', 9.99), (2, 'gadget', 24.50), (3, 'thing', 1.25)
+
+query I nosort
+SELECT id FROM p ORDER BY id
+----
+1
+2
+3
+
+query R nosort
+SELECT price FROM p ORDER BY id
+----
+9.990
+24.500
+1.250
+
+statement ok
+INSERT INTO p (id, name) VALUES (4, 'partial')
+
+query T nosort
+SELECT name FROM p WHERE id = 4
+----
+partial
+
+# The unnamed column is null, not zero and not empty.
+query I nosort
+SELECT id FROM p WHERE price IS NULL
+----
+4
+
+statement ok
+UPDATE p SET price = 19.99 WHERE id = 1
+
+query R nosort
+SELECT price FROM p WHERE id = 1
+----
+19.990
+
+statement ok
+UPDATE p SET name = 'renamed', price = 0.5 WHERE id = 3
+
+query T nosort
+SELECT name FROM p WHERE id = 3
+----
+renamed
+
+# An UPDATE with no WHERE touches every row.
+statement ok
+UPDATE p SET name = 'all'
+
+query T rowsort
+SELECT name FROM p
+----
+all
+all
+all
+all
+
+statement ok
+DELETE FROM p WHERE id = 4
+
+query I nosort
+SELECT id FROM p ORDER BY id
+----
+1
+2
+3
+
+statement ok
+DELETE FROM p
+
+query I nosort
+SELECT id FROM p
+----
+
+# Type affinity: a whole number stored in an INTEGER column stays an integer,
+# and a numeric string is parsed rather than kept as text.
+statement ok
+CREATE TABLE affinity(i INTEGER, r REAL, t TEXT)
+
+statement ok
+INSERT INTO affinity VALUES (42, 42, 42)
+
+query I nosort
+SELECT i FROM affinity
+----
+42
+
+query R nosort
+SELECT r FROM affinity
+----
+42.000
+
+query T nosort
+SELECT t FROM affinity
+----
+42
+
+statement ok
+INSERT INTO affinity VALUES ('17', '2.5', 'text')
+
+query I nosort
+SELECT i FROM affinity ORDER BY i
+----
+17
+42
+
+statement ok
+CREATE TABLE gone(a INTEGER)
+
+statement ok
+INSERT INTO gone VALUES (1)
+
+statement ok
+DROP TABLE gone
+
+statement error
+SELECT a FROM gone
+
+statement ok
+DROP TABLE IF EXISTS gone
+
+statement error
+DROP TABLE gone
+
+statement error
+CREATE TABLE p(id INTEGER)
+
+statement ok
+CREATE TABLE IF NOT EXISTS p(id INTEGER)
+
+statement error
+INSERT INTO p (nonexistent) VALUES (1)
+
+statement error
+UPDATE p SET nonexistent = 1

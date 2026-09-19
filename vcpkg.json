@@ -1,0 +1,10 @@
+{
+  "name": "strata",
+  "version": "0.1.0",
+  "description": "A crash-safe storage engine with MVCC and a SQL front end",
+  "dependencies": [
+    "gtest",
+    "benchmark",
+    "sqlite3"
+  ]
+}

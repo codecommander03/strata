@@ -1,0 +1,19 @@
+# Normalise to LF in the repository; check out native on Windows.
+* text=auto
+
+*.cpp   text diff=cpp
+*.hpp   text diff=cpp
+*.md    text diff=markdown
+*.test  text
+*.json  text
+*.yml   text
+*.html  text diff=html
+*.css   text diff=css
+*.js    text
+
+# PowerShell wants CRLF on disk.
+*.ps1   text eol=crlf
+
+# Never touch these.
+*.png   binary
+*.wasm  binary

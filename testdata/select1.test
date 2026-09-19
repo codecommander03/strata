@@ -1,0 +1,205 @@
+# Basic SELECT: projection, WHERE, ORDER BY, LIMIT.
+# Format is SQLite's sqllogictest. See docs/PLAN.md, stage 4.
+
+statement ok
+CREATE TABLE t1(a INTEGER, b INTEGER, c INTEGER, d TEXT)
+
+statement ok
+INSERT INTO t1 VALUES (1, 10, 100, 'one')
+
+statement ok
+INSERT INTO t1 VALUES (2, 20, 200, 'two')
+
+statement ok
+INSERT INTO t1 VALUES (3, 30, 300, 'three')
+
+statement ok
+INSERT INTO t1 VALUES (4, 40, 400, 'four')
+
+statement ok
+INSERT INTO t1 VALUES (5, 50, 500, 'five')
+
+query I nosort
+SELECT a FROM t1 ORDER BY a
+----
+1
+2
+3
+4
+5
+
+query I nosort
+SELECT a FROM t1 ORDER BY a DESC
+----
+5
+4
+3
+2
+1
+
+query II nosort
+SELECT a, b FROM t1 ORDER BY a
+----
+1
+10
+2
+20
+3
+30
+4
+40
+5
+50
+
+query I rowsort
+SELECT a FROM t1
+----
+1
+2
+3
+4
+5
+
+query I nosort
+SELECT a FROM t1 WHERE a > 3 ORDER BY a
+----
+4
+5
+
+query I nosort
+SELECT a FROM t1 WHERE a > 1 AND a < 4 ORDER BY a
+----
+2
+3
+
+query I nosort
+SELECT a FROM t1 WHERE a = 1 OR a = 5 ORDER BY a
+----
+1
+5
+
+query I nosort
+SELECT a FROM t1 WHERE NOT a > 2 ORDER BY a
+----
+1
+2
+
+query I nosort
+SELECT a FROM t1 ORDER BY a LIMIT 3
+----
+1
+2
+3
+
+query I nosort
+SELECT a FROM t1 ORDER BY a DESC LIMIT 2
+----
+5
+4
+
+query T nosort
+SELECT d FROM t1 ORDER BY a
+----
+one
+two
+three
+four
+five
+
+query T nosort
+SELECT d FROM t1 WHERE d = 'three'
+----
+three
+
+query I nosort
+SELECT b + c FROM t1 ORDER BY a
+----
+110
+220
+330
+440
+550
+
+query I nosort
+SELECT a * 2 + 1 FROM t1 ORDER BY a
+----
+3
+5
+7
+9
+11
+
+query I nosort
+SELECT a FROM t1 WHERE b + c > 400 ORDER BY a
+----
+4
+5
+
+query II nosort
+SELECT a, b FROM t1 ORDER BY b DESC, a
+----
+5
+50
+4
+40
+3
+30
+2
+20
+1
+10
+
+query I nosort
+SELECT 1 + 1
+----
+2
+
+query I nosort
+SELECT 7 / 2
+----
+3
+
+query I nosort
+SELECT 2 * 3 + 4 * 5
+----
+26
+
+query T nosort
+SELECT 'hello'
+----
+hello
+
+query I nosort
+SELECT a FROM t1 WHERE a > 100
+----
+
+statement error
+SELECT * FROM no_such_table
+
+statement error
+SELECT no_such_column FROM t1
+
+#unsupported: aggregate functions (COUNT, SUM, MIN, MAX) are not implemented
+query I nosort
+SELECT count(*) FROM t1
+----
+5
+
+#unsupported: joins are not implemented
+query I nosort
+SELECT t1.a FROM t1, t1 AS t2 WHERE t1.a = t2.a
+----
+1
+
+#unsupported: GROUP BY is not implemented
+query II nosort
+SELECT b, count(*) FROM t1 GROUP BY b
+----
+10
+1
+
+#unsupported: ORDER BY can only name a table column, not a projected alias
+query I nosort
+SELECT a * 2 AS doubled FROM t1 ORDER BY doubled
+----
+2

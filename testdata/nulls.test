@@ -1,0 +1,105 @@
+# Three-valued logic. The cases that separate "false" from "unknown".
+
+statement ok
+CREATE TABLE n(id INTEGER, v INTEGER, t TEXT)
+
+statement ok
+INSERT INTO n VALUES (1, 10, 'a')
+
+statement ok
+INSERT INTO n VALUES (2, NULL, 'b')
+
+statement ok
+INSERT INTO n VALUES (3, 30, NULL)
+
+statement ok
+INSERT INTO n VALUES (4, NULL, NULL)
+
+query I nosort
+SELECT id FROM n WHERE v IS NULL ORDER BY id
+----
+2
+4
+
+query I nosort
+SELECT id FROM n WHERE v IS NOT NULL ORDER BY id
+----
+1
+3
+
+# A row whose predicate is unknown is dropped, exactly like one that is false.
+query I nosort
+SELECT id FROM n WHERE v > 5 ORDER BY id
+----
+1
+3
+
+# NULL = NULL is unknown, not true. This is the single most common mistake.
+query I nosort
+SELECT id FROM n WHERE v = NULL
+----
+
+query I nosort
+SELECT id FROM n WHERE v <> NULL
+----
+
+# false AND unknown is false, so the whole predicate is decided by the left.
+query I nosort
+SELECT id FROM n WHERE 1 = 2 AND v = 10
+----
+
+# true OR unknown is true, so every row survives.
+query I nosort
+SELECT id FROM n WHERE 1 = 1 OR v = 10 ORDER BY id
+----
+1
+2
+3
+4
+
+# unknown AND true stays unknown, so nothing survives.
+query I nosort
+SELECT id FROM n WHERE v = 10 AND 1 = 1 ORDER BY id
+----
+1
+
+# NOT unknown is unknown.
+query I nosort
+SELECT id FROM n WHERE NOT (v = 10) ORDER BY id
+----
+3
+
+query T nosort
+SELECT t FROM n WHERE t IS NULL
+----
+NULL
+NULL
+
+# Arithmetic propagates null rather than treating it as zero.
+query I nosort
+SELECT v + 1 FROM n ORDER BY id
+----
+11
+NULL
+31
+NULL
+
+# Division by zero is null, not an error.
+query I nosort
+SELECT 1 / 0
+----
+NULL
+
+statement ok
+CREATE TABLE required(id INTEGER, name TEXT NOT NULL)
+
+statement ok
+INSERT INTO required VALUES (1, 'present')
+
+statement error
+INSERT INTO required VALUES (2, NULL)
+
+query I nosort
+SELECT id FROM required ORDER BY id
+----
+1
