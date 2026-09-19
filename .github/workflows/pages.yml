@@ -83,7 +83,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `enablement` turns Pages on for the repository the first time this
+      # runs, so there is no manual step in Settings. Without it the action
+      # fails on a repository that has never had a Pages site, which is what
+      # happened on the first attempt.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Upload web/
         uses: actions/upload-pages-artifact@v3
