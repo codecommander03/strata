@@ -1,0 +1,95 @@
+name: pages
+
+# Publishes web/ to GitHub Pages.
+#
+# web/ is a folder of static files with no build step: index.html, one
+# stylesheet, one script, and the two WebAssembly artifacts, which are
+# committed on purpose (decision 018) so that deploying needs no toolchain.
+# This workflow therefore only uploads — it does not compile.
+#
+# The hazard that creates: change C++ and push without running
+# scripts/build_wasm.ps1, and the deployed page serves a stale engine while
+# the source says otherwise. The `stale-wasm` job below *warns* when a commit
+# touches the engine without touching the artifacts.
+#
+# It warns rather than fails, deliberately. An engine change does not always
+# change the output — adding a missing #include, for instance, compiles to
+# byte-identical WebAssembly, so git records no change and a blocking check
+# would reject a commit that was in fact correct. That happened on commit
+# 3a72399 before this file existed. A check that fails on correct work teaches
+# people to bypass it, so this one reports and steps aside.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Pages deployment needs these; `id-token` is what lets deploy-pages prove
+# the artifact came from this workflow.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one halfway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  stale-wasm:
+    name: Warn if the committed wasm may be stale
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Did the engine change without the artifacts changing?
+        run: |
+          # The first commit on a branch has no parent to diff against.
+          if ! git rev-parse HEAD~1 >/dev/null 2>&1; then
+            echo "No parent commit; nothing to compare."
+            exit 0
+          fi
+
+          changed=$(git diff --name-only HEAD~1 HEAD)
+          engine=$(echo "$changed" | grep -E '^(src/|include/)' || true)
+          wasm=$(echo "$changed" | grep -E '^web/strata\.(js|wasm)$' || true)
+
+          if [ -n "$engine" ] && [ -z "$wasm" ]; then
+            echo "::warning::Engine sources changed but web/strata.js and web/strata.wasm did not."
+            echo ""
+            echo "This is fine when the change compiles to identical output — an added"
+            echo "#include, a comment, a test-only edit. It is not fine otherwise, and"
+            echo "then the deployed playground serves an engine older than this source."
+            echo ""
+            echo "If in doubt: run scripts/build_wasm.ps1 and commit what it produces."
+            echo ""
+            echo "Changed engine files:"
+            echo "$engine"
+          else
+            echo "OK — the engine is unchanged, or the artifacts moved with it."
+          fi
+
+  deploy:
+    name: Deploy
+    needs: stale-wasm
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      - name: Upload web/
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

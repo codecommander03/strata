@@ -216,6 +216,14 @@ git clone https://github.com/emscripten-core/emsdk.git C:\emsdk
 cd C:\emsdk; .\emsdk.bat install latest; .\emsdk.bat activate latest
 ```
 
+`.github/workflows/pages.yml` publishes `web/` to GitHub Pages on every push
+to `main`. The WebAssembly artifacts are committed rather than built in CI, so
+that workflow **warns when `src/` or `include/` changed without
+`web/strata.wasm` changing with them** — the case where the deployed page
+would quietly serve an engine older than the source beside it. It warns rather
+than blocks, because some engine changes compile to byte-identical output and
+a check that rejects correct work gets bypassed.
+
 ---
 
 ## How it works
