@@ -341,6 +341,80 @@ void BM_Strata_ParseOnly(benchmark::State& state) {
 }
 BENCHMARK(BM_Strata_ParseOnly)->Unit(benchmark::kMicrosecond);
 
+/// The same query as BM_Strata_SelectWhere, with an index on the column.
+///
+/// Stage 6 predicted that the 29x gap was the materialising scan rather than
+/// the parser, and that an index scan would bypass it for a selective
+/// predicate. This is that prediction being paid out or not.
+void BM_Strata_SelectWhereIndexed(benchmark::State& state) {
+    const int count = static_cast<int>(state.range(0));
+    Scratch scratch("sql_select_indexed");
+    Database db;
+    db.open(scratch.path());
+    Session session(db);
+    ResultSet result;
+    session.run("CREATE TABLE t(a INTEGER, b TEXT)", &result);
+    session.run("BEGIN", &result);
+    for (int i = 0; i < count; ++i) {
+        session.run("INSERT INTO t VALUES (" + std::to_string(i) + ", 'row')", &result);
+    }
+    session.run("COMMIT", &result);
+    session.run("CREATE INDEX idx_a ON t(a)", &result);
+
+    for (auto _ : state) {
+        ResultSet rows;
+        session.run("SELECT a FROM t WHERE a = " + std::to_string(count / 2), &rows);
+        benchmark::DoNotOptimize(rows.rows.size());
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_Strata_SelectWhereIndexed)->Arg(1000)->Unit(benchmark::kMicrosecond);
+
+/// SQLite with the same index, so the comparison stays like for like.
+void BM_Sqlite_SelectWhereIndexed(benchmark::State& state) {
+    const int count = static_cast<int>(state.range(0));
+    Scratch scratch("sqlite_select_indexed");
+    Sqlite db(scratch.path());
+    db.exec("CREATE TABLE t(a INTEGER, b TEXT)");
+    db.exec("BEGIN");
+    for (int i = 0; i < count; ++i) {
+        db.exec("INSERT INTO t VALUES (" + std::to_string(i) + ", 'row')");
+    }
+    db.exec("COMMIT");
+    db.exec("CREATE INDEX idx_a ON t(a)");
+
+    const std::string sql = "SELECT a FROM t WHERE a = " + std::to_string(count / 2);
+    for (auto _ : state) {
+        db.exec(sql);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_Sqlite_SelectWhereIndexed)->Arg(1000)->Unit(benchmark::kMicrosecond);
+
+/// Indexes are not free on the write path: every insert now maintains one.
+void BM_Strata_BulkInsertIndexed(benchmark::State& state) {
+    const int count = static_cast<int>(state.range(0));
+    for (auto _ : state) {
+        state.PauseTiming();
+        Scratch scratch("sql_insert_indexed");
+        Database db;
+        db.open(scratch.path());
+        Session session(db);
+        ResultSet result;
+        session.run("CREATE TABLE t(a INTEGER, b TEXT)", &result);
+        session.run("CREATE INDEX idx_a ON t(a)", &result);
+        state.ResumeTiming();
+
+        session.run("BEGIN", &result);
+        for (int i = 0; i < count; ++i) {
+            session.run("INSERT INTO t VALUES (" + std::to_string(i) + ", 'row')", &result);
+        }
+        session.run("COMMIT", &result);
+    }
+    state.SetItemsProcessed(state.iterations() * count);
+}
+BENCHMARK(BM_Strata_BulkInsertIndexed)->Arg(1000)->Unit(benchmark::kMillisecond);
+
 void BM_Strata_FullScan(benchmark::State& state) {
     const int count = static_cast<int>(state.range(0));
     Scratch scratch("sql_scan");

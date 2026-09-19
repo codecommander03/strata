@@ -55,6 +55,8 @@ const std::unordered_map<std::string_view, TokenType>& keyword_table() {
         {"commit", TokenType::Commit},
         {"rollback", TokenType::Rollback},
         {"transaction", TokenType::Transaction},
+        {"index", TokenType::Index},
+        {"on", TokenType::On},
     };
     return table;
 }
@@ -139,6 +141,10 @@ const char* token_type_name(TokenType type) {
         return "ROLLBACK";
     case TokenType::Transaction:
         return "TRANSACTION";
+    case TokenType::Index:
+        return "INDEX";
+    case TokenType::On:
+        return "ON";
     case TokenType::LParen:
         return "'('";
     case TokenType::RParen:

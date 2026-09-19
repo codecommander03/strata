@@ -60,11 +60,20 @@ TEST(SqlLogicTest, Transactions) {
     EXPECT_EQ(report.total_passed(), report.total_run());
 }
 
+/// Every query in this file runs twice, before and after the index exists,
+/// with the same expected output. An index that changes an answer is a bug.
+TEST(SqlLogicTest, Indexes) {
+    const SltReport report = run_file("indexes");
+    expect_clean(report, "indexes");
+    EXPECT_EQ(report.total_passed(), report.total_run());
+    EXPECT_EQ(report.unsupported, 1);
+}
+
 /// Prints the combined figure that goes in the README, and fails if the whole
 /// corpus is not green.
 TEST(SqlLogicTest, WholeCorpus) {
     SltReport total;
-    for (const char* name : {"select1", "nulls", "dml", "transactions"}) {
+    for (const char* name : {"select1", "nulls", "dml", "transactions", "indexes"}) {
         const SltReport report = run_file(name);
         total.statements_run += report.statements_run;
         total.statements_passed += report.statements_passed;

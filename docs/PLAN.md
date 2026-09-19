@@ -1,8 +1,9 @@
 # Strata — plan
 
-Six stages. A stage is not finished until its gate passes, and a gate is a test
-or a measurement against something outside the project — never an opinion.
-Ticking a gate means writing down what the evidence was.
+Seven stages — six planned up front, and a seventh that a measurement argued
+for. A stage is not finished until its gate passes, and a gate is a test or a
+measurement against something outside the project, never an opinion. Ticking a
+gate means writing down what the evidence was.
 
 The claim the whole thing builds toward:
 
@@ -17,7 +18,7 @@ SQLite's published corpus of statements and expected results. Both are somebody
 else's idea of correct.
 
 **Ship point: Stage 2.** A crash-safe storage engine with real snapshot
-isolation is a complete, defensible project. Stages 3 to 6 are upside.
+isolation is a complete, defensible project. Everything after it is upside.
 
 ---
 
@@ -151,8 +152,8 @@ uses them.
   against an indexed column, emit an `IndexScan`, and say which it chose in the
   plan — so the playground shows the choice being made.
 
-**Gate** — [ ] **NOT PASSED.** Three things, and the first is the one that
-matters:
+**Gate** — [x] **PASSED 2026-09-19.** All three, evidence below. The first is
+the one that matters:
 
 1. **An index that disagrees with its table is detected, not served.**
    `verify_indexes()` walks every index entry and checks it against the heap,
@@ -353,8 +354,8 @@ would only mean the harness never looked.
 
 ```
   strata.js      62,240 bytes
-  strata.wasm   251,164 bytes
-  total         313,404 bytes  (306 KB)
+  strata.wasm   288,907 bytes
+  total         351,147 bytes  (343 KB)
 ```
 
 No exceptions and no RTTI, which decision 008 made possible by returning
@@ -422,3 +423,51 @@ keys to 1,630 ns at a hundred thousand — a hundredfold increase in data for
 2.1x the time, which is the logarithmic shape it should have — and a full
 cursor scan runs at 15.3 M entries per second. The storage engine is sound;
 the SQL layer's scan strategy is what costs.
+
+### Stage 7 — 2026-09-19
+
+**154 unit tests**, up from 132; 21 of them are new and cover indexes. The
+sqllogictest corpus grew to **163/163** with five declared gaps. Clean build
+under `/W4`, zero warnings.
+
+**1. A drifted index is detected.** `verify_indexes` walks both directions:
+every row must have its entry, and no entry may point at anything that is not
+there. Two tests reach past SQL and damage the index by hand — one deletes an
+entry, the other adds an entry for a value no row holds, which is what an
+update leaves behind if it forgets to retract the old one. Both are caught as
+`Corruption`. This matters because neither corruption is visible at the query
+level: the rows are all still present and every other query still works.
+
+**2. The corpus cannot tell whether an index exists.** `testdata/indexes.test`
+runs thirteen queries — equality, negative numbers, ranges in both directions,
+a conjunction, a reversed comparison, text, reals, nulls — records the answers
+with no index, then creates three indexes and demands byte-identical output.
+`IndexTest.AnIndexedQueryAnswersExactlyAsAnUnindexedOneDoes` does the same in
+C++ over twelve more. An index may change how long an answer takes. It may not
+change the answer.
+
+**3. The prediction paid out.** Stage 6 said the 29x gap was the materialising
+scan and that an index would bypass it for a selective predicate:
+
+```
+SELECT a FROM t WHERE a = 500     no index    1,205 us
+                                  indexed        15.0 us     80x faster
+                                  SQLite         11.7 us     1.28x apart
+```
+
+The gap against SQLite closes from 18.6x to 1.28x. SQLite itself only gains
+5.5x from the same index, because its unindexed scan was already streaming —
+so the size of strata's win measures how bad its unindexed path is, not how
+good its index is. Writes pay for it: bulk insert goes from 13.6 ms to 19.0 ms,
+**1.40x slower**, with one index to maintain.
+
+And `SELECT a FROM t` with no predicate is unchanged at 1,344 us, because there
+is nothing to seek to. Indexes fixed the selective case and left the full-scan
+case exactly where it was; that one still needs streaming.
+
+**A regression only the benchmark caught.** Adding indexes made *unindexed*
+insert 40% slower, confirmed across three runs. `scan_prefix` walked the whole
+write set on every call to answer "does this table have indexes?", turning a
+thousand inserts into half a million string comparisons. The write set is an
+ordered map, so the fix was `lower_bound` and a break. **All 154 tests passed
+throughout** — correctness never wavered, and only a measurement noticed.

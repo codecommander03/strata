@@ -48,6 +48,8 @@ enum class TokenType : std::uint8_t {
     Commit,
     Rollback,
     Transaction,
+    Index,
+    On,
 
     // punctuation and operators
     LParen,

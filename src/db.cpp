@@ -270,14 +270,21 @@ Status Transaction::scan_prefix(const std::string& prefix,
     }
 
     // Then this transaction's own writes, which win over what it can see.
-    for (const auto& [key, write] : writes_) {
-        if (key.size() < prefix.size() || key.compare(0, prefix.size(), prefix) != 0) {
-            continue;
+    //
+    // `writes_` is ordered, so seek to the prefix and stop at the end of its
+    // range rather than examining every key. Walking the whole map made this
+    // O(write set) per call, and callers invoke it once per statement — so a
+    // thousand inserts in one transaction cost half a million comparisons
+    // before the first index existed to justify them.
+    for (auto it = writes_.lower_bound(prefix); it != writes_.end(); ++it) {
+        const std::string& key = it->first;
+        if (key.compare(0, prefix.size(), prefix) != 0) {
+            break;
         }
-        if (write.deleted) {
+        if (it->second.deleted) {
             live.erase(key);
         } else {
-            live[key] = write.value;
+            live[key] = it->second.value;
         }
     }
 

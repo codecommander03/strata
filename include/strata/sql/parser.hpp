@@ -47,6 +47,8 @@ private:
     bool statement(Statement* out, ParseError* error);
     bool create_table(Statement* out, ParseError* error);
     bool drop_table(Statement* out, ParseError* error);
+    bool create_index(Statement* out, ParseError* error);
+    bool drop_index(Statement* out, ParseError* error);
     bool insert(Statement* out, ParseError* error);
     bool select(Statement* out, ParseError* error);
     bool update(Statement* out, ParseError* error);

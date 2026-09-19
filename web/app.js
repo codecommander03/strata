@@ -58,6 +58,18 @@ SELECT balance FROM acct;`
       sql: `SELECT * FROM t WHERE`
     },
     {
+      label: "An index changes the plan",
+      sql: `CREATE TABLE emp (id INTEGER, name TEXT, salary REAL);
+INSERT INTO emp VALUES
+  (1,'ada',120.5), (2,'grace',140.0), (3,'alan',99.25), (4,'edsger',88.0);
+
+CREATE INDEX idx_salary ON emp(salary);
+
+-- The plan says IndexScan and "1 of 1 candidates" instead of scanning
+-- the table. The Filter stays: the index narrows, the predicate decides.
+SELECT name FROM emp WHERE salary = 140;`
+    },
+    {
       label: "What a query costs in pages",
       sql: `CREATE TABLE big (a INTEGER, b TEXT);
 

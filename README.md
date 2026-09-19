@@ -9,9 +9,9 @@
 <p align="center">
   <img alt="C++20" src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white">
   <img alt="CMake" src="https://img.shields.io/badge/build-CMake%20%2B%20vcpkg-064F8C?logo=cmake&logoColor=white">
-  <img alt="tests" src="https://img.shields.io/badge/tests-132%20passing-2ea44f">
-  <img alt="sqllogictest" src="https://img.shields.io/badge/sqllogictest-112%2F112-2ea44f">
-  <img alt="WebAssembly" src="https://img.shields.io/badge/wasm-306%20KB-654FF0?logo=webassembly&logoColor=white">
+  <img alt="tests" src="https://img.shields.io/badge/tests-154%20passing-2ea44f">
+  <img alt="sqllogictest" src="https://img.shields.io/badge/sqllogictest-163%2F163-2ea44f">
+  <img alt="WebAssembly" src="https://img.shields.io/badge/wasm-343%20KB-654FF0?logo=webassembly&logoColor=white">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
 
@@ -44,13 +44,9 @@ acknowledged write came back.
 It is about 9,600 lines of C++ with no database dependencies — the B+tree, the
 pager, the write-ahead log, the parser and the executor are all here.
 
-> **Status: 5½ of 6 stages complete.** Everything below works and is tested.
+> **Status: 6½ of 7 stages complete.** Everything below works and is tested.
 > The half is a public URL for the playground — it builds and runs, it just
 > isn't deployed yet.
->
-> **Next: [stage 7, secondary indexes](docs/PLAN.md).** Stage 6 measured the
-> cost of not having them; that number is the reason they're now on the plan
-> rather than on the someday list.
 
 ---
 
@@ -154,7 +150,26 @@ error: InvalidArgument: 1:8: unterminated string literal
 That last one reports the *opening* quote, not end-of-input — the difference
 between a usable message and a useless one in a long statement.
 
-### 5. Kill it mid-write
+### 5. Add an index and watch the plan change
+
+```
+strata> CREATE INDEX idx_salary ON emp(salary);
+ok
+strata> SELECT name FROM emp WHERE salary = 140;
+Project name
+  Filter (salary = 140)
+    IndexScan idx_salary on emp  (seek, 1 of 1 candidates fetched)
+```
+
+The planner recognises `column = literal` against an indexed column and seeks
+instead of scanning — one row off the heap instead of the whole table. On a
+thousand rows that is **80× faster** (1,205 µs → 15.0 µs).
+
+Note the `Filter` is still there. The index narrows the candidates; the
+predicate still decides. That way an encoding collision costs a wasted row
+fetch and never a wrong answer ([decision 021](docs/DECISIONS.md)).
+
+### 6. Kill it mid-write
 
 The gate for the storage engine wasn't a unit test. It was a separate process
 writing real transactions, killed by the operating system at random points:
@@ -179,18 +194,18 @@ separator bounds, uniform leaf depth, and a sibling chain reaching exactly as
 many keys as the tree claims — and then reads back every key to confirm its
 value.
 
-### 6. Run it in a browser
+### 7. Run it in a browser
 
 ```powershell
 PS> .\scripts\build_wasm.ps1 -Serve
 
   strata.js      62,240 bytes
-  strata.wasm   251,164 bytes
-  total         313,404 bytes (306 KB)
+  strata.wasm   288,907 bytes
+  total         351,147 bytes (343 KB)
 ```
 
 The playground in the screenshot above is a folder of five static files. **No
-backend, no build step, nothing to pay for** — every visitor downloads 306 KB
+backend, no build step, nothing to pay for** — every visitor downloads 343 KB
 once and runs their own database in their own tab. It shows the query plan, the
 token stream, and how many pages each query touched.
 
@@ -209,8 +224,9 @@ cd C:\emsdk; .\emsdk.bat install latest; .\emsdk.bat activate latest
         ┌──────────────────────────────────────────────┐
         │  web/          playground, WebAssembly       │  stage 5
         ├──────────────────────────────────────────────┤
-        │  Executor      SeqScan Filter Sort Project   │  stage 4
-        │                Limit — pull-based iterators  │
+        │  Executor      SeqScan IndexScan Filter     │  stage 4
+        │                Sort Project Limit — pull-    │  stage 7
+        │                based iterators               │
         ├──────────────────────────────────────────────┤
         │  Parser        lexer, recursive descent,     │  stage 3
         │                precedence climbing, AST      │
@@ -279,11 +295,12 @@ isolation-level claim stays honest over time.
 ### sqllogictest — SQL
 
 ```
-statements 60/60   queries 52/52   total 112/112   unsupported 4
+statements 78/78   queries 85/85   total 163/163   unsupported 5
   unsupported: aggregate functions (COUNT, SUM, MIN, MAX) are not implemented
   unsupported: joins are not implemented
   unsupported: GROUP BY is not implemented
   unsupported: ORDER BY can only name a table column, not a projected alias
+  unsupported: composite indexes need a tuple encoding and prefix-aware planning
 ```
 
 **Read the caveat before quoting the number.** This is sqllogictest's *format*
@@ -318,10 +335,11 @@ defaults.
 
 | | strata | SQLite | |
 |---|---:|---:|---|
-| Commit latency, one row per transaction | 2,353 µs | 2,192 µs | 1.07× slower |
-| Bulk insert, 1,000 rows, one transaction | 14.3 ms | 10.4 ms | 1.4× slower |
-| `SELECT a FROM t WHERE a = 500` | 2,086 µs | 70 µs | **29× slower** |
-| `SELECT a FROM t` | 1,565 µs | 118 µs | 13× slower |
+| Commit latency, one row per transaction | 2,212 µs | 2,062 µs | 1.07× slower |
+| Bulk insert, 1,000 rows, one transaction | 13.6 ms | 9.50 ms | 1.4× slower |
+| `SELECT … WHERE a = 500`, no index | 1,205 µs | 64.9 µs | 18.6× slower |
+| `SELECT … WHERE a = 500`, **indexed** | **15.0 µs** | 11.7 µs | **1.28× slower** |
+| `SELECT a FROM t`, whole table | 1,344 µs | 99.0 µs | 13.6× slower |
 
 **Commit latency within 7% is the good news.** Both engines are waiting on the
 same fsync, which says the write-ahead log is paying full price for durability
@@ -406,11 +424,11 @@ is in [FUTURE.md](docs/FUTURE.md).
 
 - **Joins, aggregates, `GROUP BY`, subqueries.** The SQL subset is deliberately
   small.
-- **Secondary indexes** — *next up, [stage 7](docs/PLAN.md)*. Every query is a
-  full scan today. Stage 6 measured what that costs, and the 29× above is why
-  this moved off the someday list and onto the plan.
-- **Streaming scans.** A query's working set is the size of the table, not the
-  size of the result — see the 29× above.
+- **Composite indexes.** One column per index; `CREATE INDEX i ON t(a, b)` is
+  a parse error rather than a silent half-index.
+- **Streaming scans.** A query with no usable index still materialises the
+  whole table — which is why `SELECT a FROM t` is still 13.6× off SQLite while
+  an indexed lookup is 1.28×.
 - **Page-cache eviction.** The cache grows to the size of the database.
 - **Freelist reuse and node merging.** Deleted space is never recycled.
 - **Concurrency.** Single-threaded by design; "concurrent transactions" means
@@ -426,6 +444,8 @@ that lost and what the choice cost. A few that shaped everything else:
 
 | # | Decision |
 |---|---|
+| 021 | An index narrows candidates; the predicate still decides |
+| 023 | Index maintenance in the writing transaction, and drift is checkable |
 | 002 | Write-ahead logging, not ARIES undo/redo |
 | 004 | Deleting a cell orphans its bytes; space is reclaimed by compaction |
 | 006 | Splits propagate by return value, not by re-descending |

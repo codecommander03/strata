@@ -6,7 +6,7 @@ comparable with anything measured anywhere else, and a ratio between two
 engines measured in the same process on the same data is the only part of this
 document worth carrying away.
 
-Run 2026-09-19.
+Run 2026-09-19, re-run after stage 7 added secondary indexes.
 
 | | |
 |---|---|
@@ -47,10 +47,11 @@ internal page.
 
 | Benchmark | strata | SQLite | Ratio |
 |---|---:|---:|---:|
-| Bulk insert, 1,000 rows, one transaction | 14.3 ms | 10.4 ms | **1.4× slower** |
-| Commit latency, one row per transaction | 2,353 µs | 2,192 µs | **1.07× slower** |
-| `SELECT a FROM t WHERE a = 500`, 1,000 rows | 2,086 µs | 70 µs | **29× slower** |
-| `SELECT a FROM t`, 1,000 rows | 1,565 µs | 118 µs | **13× slower** |
+| Bulk insert, 1,000 rows, one transaction | 13.6 ms | 9.50 ms | **1.4× slower** |
+| Commit latency, one row per transaction | 2,212 µs | 2,062 µs | **1.07× slower** |
+| `SELECT … WHERE a = 500`, **no index** | 1,205 µs | 64.9 µs | **18.6× slower** |
+| `SELECT … WHERE a = 500`, **indexed** | **15.0 µs** | 11.7 µs | **1.28× slower** |
+| `SELECT a FROM t`, whole table | 1,344 µs | 99.0 µs | **13.6× slower** |
 
 ### Where it holds up
 
@@ -93,11 +94,61 @@ from a cursor and stops when it can.
 This is a design cost that was written down before it was measured. Decision
 015 says the working set is the size of the table rather than the size of the
 result, and predicts this is "the single biggest thing standing between this
-engine and a real one". The benchmark puts a number on it: **29×**.
+engine and a real one". The benchmark put a number on it, and stage 7 then
+tested the other half of the prediction.
 
-The secondary cost is the absence of secondary indexes — `WHERE a = 500` is a
-full scan in both engines here, but SQLite's full scan is 13× faster than
-strata's, so indexing would not close the gap on its own. Streaming would.
+## What an index does to that number
+
+Stage 6 predicted that an index scan would bypass the materialising scan for a
+selective predicate. Same query, same data, same machine — the only difference
+is one `CREATE INDEX`:
+
+| `SELECT a FROM t WHERE a = 500` | strata | SQLite |
+|---|---:|---:|
+| No index | 1,205 µs | 64.9 µs |
+| Indexed | **15.0 µs** | 11.7 µs |
+| | **80× faster** | 5.5× faster |
+
+**80× on strata's own query**, and the gap against SQLite closes from 18.6× to
+**1.28×**. An index scan seeks to one entry and fetches one row, so it never
+enters the code path that materialises the table — which is exactly the shape
+the prediction had.
+
+SQLite speeds up only 5.5× on the same change because its unindexed scan was
+already streaming. The size of strata's win is a measure of how bad its
+unindexed path is, not of how good its index is.
+
+**Indexes are not free on writes.** Every insert now maintains one:
+
+| Bulk insert, 1,000 rows | |
+|---|---:|
+| No index | 13.6 ms |
+| One index | 19.0 ms |
+| | **1.40× slower** |
+
+**And they do nothing for a query with no predicate.** `SELECT a FROM t` still
+takes 1,344 µs against SQLite's 99.0 µs, because there is nothing to seek to.
+Closing *that* needs streaming scans, which remains the first item under
+storage in `FUTURE.md`. Indexes fixed the selective case and left the
+full-scan case exactly where it was.
+
+### A regression the benchmark caught
+
+Adding indexes made *unindexed* bulk insert 40% slower — 14.3 ms before stage
+7, 19.5 ms after — and three repeat runs confirmed it was not noise.
+
+The cause was `scan_prefix` walking the transaction's entire write set on every
+call to decide which of its own uncommitted writes fell inside the prefix.
+That had always been O(write set), but nothing called it per-statement until
+the insert path started asking "does this table have indexes?" on every row.
+A thousand inserts in one transaction turned into half a million string
+comparisons.
+
+The write set is a `std::map`, so the fix is `lower_bound(prefix)` and a break
+at the end of the range. Unindexed insert returned to 13.6 ms and the indexed
+path dropped from 35 ms to 19 ms. It is worth recording because the regression
+was invisible to all 154 tests — every one of them still passed, and only a
+benchmark noticed.
 
 ---
 

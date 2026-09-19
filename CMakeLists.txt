@@ -25,6 +25,7 @@ add_library(strata_core
     src/sql/ast.cpp
     src/sql/parser.cpp
     src/sql/catalog.cpp
+    src/sql/index_catalog.cpp
     src/sql/executor.cpp
     src/sql/session.cpp
     src/sql/slt.cpp
@@ -59,6 +60,7 @@ add_executable(strata_tests
     tests/hermitage_test.cpp
     tests/parser_test.cpp
     tests/executor_test.cpp
+    tests/index_test.cpp
     tests/slt_test.cpp
 )
 target_link_libraries(strata_tests PRIVATE strata_core GTest::gtest GTest::gtest_main)

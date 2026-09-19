@@ -491,3 +491,113 @@ watch the page cache produce a hit on a second run, which it never does,
 because nothing evicts. Instrumentation that is visible to users will expose
 the engine's limitations whether or not that was the intention, and the fix was
 to say so on the page rather than to pick a friendlier metric.
+
+---
+
+## 021 — An index narrows candidates; the predicate still decides
+
+**Decided 2026-09-19.**
+
+An `IndexScan` produces rows the index says *might* match. The original `WHERE`
+clause is still evaluated on every one of them by the `Filter` above it. The
+index is never the authority on whether a row qualifies.
+
+**Alternatives considered.** Trusting the index and dropping the filter, which
+is what a mature engine does and is strictly faster — one less evaluation per
+row.
+
+**Why.** It makes a whole category of bug impossible instead of merely unlikely.
+The index key encodes numbers as doubles, so two integers above 2^53 collide;
+a future encoding change could introduce other collisions. Under this rule a
+collision costs a wasted row fetch. Under the alternative it returns a row that
+does not match the query, and no test at the SQL level would obviously catch
+it — the answer is simply, quietly wrong.
+
+It also means the planner can be wrong without being unsafe. If
+`find_index_plan` ever picks an index that does not actually satisfy the
+predicate, the result is slow, not incorrect.
+
+**Cost.** Every row produced through an index is evaluated twice — once
+implicitly by the seek, once explicitly by the filter. Measured against the
+alternative that cost is real but small next to the row fetch it accompanies,
+and the benchmark still shows an 80x improvement over no index at all.
+
+---
+
+## 022 — One column per index, and composite syntax is rejected rather than truncated
+
+**Decided 2026-09-19.**
+
+`CREATE INDEX name ON table(column)` takes exactly one column.
+`CREATE INDEX name ON table(a, b)` is a parse error.
+
+**Alternatives considered.** Accepting the syntax and indexing only the first
+column, which is less code and keeps more SQL parsing. Implementing composite
+indexes properly, which needs a tuple encoding with per-column terminators and
+a planner that understands prefix matching.
+
+**Why.** Silently indexing one column of two is the worst of the three: the
+statement appears to succeed, queries return correct answers, and the index
+simply never helps the way the author expected. An error says what is true.
+
+**Cost.** No composite indexes, so a query filtering on two columns uses an
+index for one of them and filters the rest. The `#unsupported:` block in
+`testdata/indexes.test` names the gap and it is counted in the corpus report.
+
+---
+
+## 023 — Index maintenance happens in the writing transaction, and drift is checkable
+
+**Decided 2026-09-19.**
+
+Every `INSERT`, `UPDATE` and `DELETE` writes its index entries through the same
+`Transaction` that writes the row. `verify_indexes()` cross-checks every index
+against its table in both directions.
+
+**Alternatives considered.** Rebuilding indexes lazily or on a background pass,
+which is cheaper on the write path.
+
+**Why.** An index in a different transaction from its row can be half-applied
+by a rollback, and an index that disagrees with its table returns confidently
+wrong answers — the failure that no query-level test catches, because every row
+involved still exists and every other query still works. Sharing the
+transaction makes the two atomic for free, since the MVCC layer already
+guarantees it.
+
+The verification is the other half. `BTree::verify_integrity` proves the tree
+is internally consistent; that says nothing about whether the *index* agrees
+with it. `verify_indexes` walks both directions — every row has its entry, and
+no entry points at anything absent — and two tests damage an index by hand to
+prove the check is not vacuous.
+
+**Cost.** Writes are **1.40x slower** with one index to maintain, measured, and
+that multiplies with each additional index. Also, the delete path treats a
+missing entry as corruption rather than ignoring it, so a pre-existing drift
+surfaces as an error on the next delete instead of being silently repaired —
+deliberately, because silently repairing it would hide the bug that caused it.
+
+---
+
+## 024 — scan_prefix seeks into the write set instead of walking it
+
+**Decided 2026-09-19, superseding the implementation in decision 012.**
+
+`Transaction::scan_prefix` merges the transaction's uncommitted writes over the
+committed rows. It now uses `lower_bound(prefix)` on the ordered write set and
+stops at the end of the range, rather than examining every key.
+
+**Why this is recorded.** The original walked the whole map. That was O(write
+set) per call and invisible until stage 7 made the insert path ask "does this
+table have indexes?" once per statement — at which point a thousand inserts in
+one transaction became half a million string comparisons, and unindexed insert
+got 40% slower.
+
+**What it cost to find.** Nothing in the test suite noticed. All 154 tests
+passed before the fix and after it; correctness never changed. Three repeat
+benchmark runs are what separated a real regression from noise.
+
+The general lesson is recorded because it will recur: a data structure chosen
+for correctness (an ordered map, so that merge order is deterministic) had an
+access pattern nobody had needed yet. When a new caller changes the frequency
+of an existing call, its complexity becomes a new question, and the tests will
+not ask it.

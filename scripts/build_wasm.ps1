@@ -72,6 +72,7 @@ $sources = @(
     "src/sql/ast.cpp"
     "src/sql/parser.cpp"
     "src/sql/catalog.cpp"
+    "src/sql/index_catalog.cpp"
     "src/sql/executor.cpp"
     "src/sql/session.cpp"
     "src/wasm/bindings.cpp"

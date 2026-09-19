@@ -93,6 +93,18 @@ struct DropTable {
     bool if_exists = false;
 };
 
+struct CreateIndex {
+    std::string name;
+    std::string table;
+    std::string column;
+    bool if_not_exists = false;
+};
+
+struct DropIndex {
+    std::string name;
+    bool if_exists = false;
+};
+
 struct Insert {
     std::string table;
     std::vector<std::string> columns; ///< empty means "every column, in order"
@@ -142,8 +154,8 @@ struct TransactionStatement {
     TransactionControl control = TransactionControl::Begin;
 };
 
-using Statement =
-    std::variant<CreateTable, DropTable, Insert, Select, Update, Delete, TransactionStatement>;
+using Statement = std::variant<CreateTable, DropTable, CreateIndex, DropIndex, Insert, Select,
+                               Update, Delete, TransactionStatement>;
 
 /// A short description of what a statement is, for errors and tests.
 std::string statement_kind(const Statement& statement);

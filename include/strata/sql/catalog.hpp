@@ -24,6 +24,22 @@ struct TableDef {
 std::string encode_table_def(const TableDef& def);
 bool decode_table_def(Bytes stored, TableDef* out);
 
+/// One index, over one column of one table.
+///
+/// Single-column only. Composite indexes need a tuple encoding and a planner
+/// that understands prefix matching, and neither is needed to demonstrate what
+/// stage 7 set out to demonstrate.
+struct IndexDef {
+    std::string name;
+    std::string table;
+    TableId table_id = 0;
+    IndexId id = 0;
+    int column = 0; ///< position in the table's column list
+};
+
+std::string encode_index_def(const IndexDef& def);
+bool decode_index_def(Bytes stored, IndexDef* out);
+
 /// Table definitions, read and written through an ordinary transaction.
 ///
 /// The catalog is not a special structure: it lives in the same tree, under the
@@ -43,10 +59,33 @@ public:
     /// Writes back a definition whose `next_row_id` has moved.
     Status save(const TableDef& def);
 
+    // --- indexes ---
+
+    Status create_index(const CreateIndex& statement, IndexDef* out);
+    Status drop_index(const DropIndex& statement);
+
+    Status lookup_index(const std::string& name, IndexDef* out);
+
+    /// Every index defined over this table, which is what the write path needs
+    /// on each insert, update and delete.
+    Status indexes_for(TableId table, std::vector<IndexDef>* out);
+
+    /// Every index in the database, for `verify_indexes` and the shell.
+    Status all_indexes(std::vector<IndexDef>* out);
+
 private:
     Status allocate_table_id(TableId* out);
+    Status allocate_index_id(IndexId* out);
 
     Transaction* txn_;
 };
+
+/// Writes the index entries for one row of one table.
+Status index_row(Transaction& txn, const TableDef& table, const std::vector<IndexDef>& indexes,
+                 RowId row_id, const Row& row);
+
+/// Removes them again.
+Status unindex_row(Transaction& txn, const TableDef& table, const std::vector<IndexDef>& indexes,
+                   RowId row_id, const Row& row);
 
 } // namespace strata::sql

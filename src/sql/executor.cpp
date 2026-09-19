@@ -1,8 +1,11 @@
 #include "strata/sql/executor.hpp"
 
+#include "strata/sql/keyenc.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstdlib>
+#include <set>
 
 namespace strata::sql {
 namespace {
@@ -94,6 +97,53 @@ private:
     std::vector<RowId> ids_;
     std::vector<std::string> columns_;
     std::string table_;
+    std::size_t at_ = 0;
+};
+
+/// Reads rows through an index instead of walking the table.
+///
+/// For an equality predicate the seek is exact: the index key is
+/// `index_id | encoded_value | row_id`, so a prefix scan on
+/// `index_id | encoded_value` returns precisely the matching entries and
+/// nothing else. For a range predicate the whole index is walked in value
+/// order and non-matching entries are skipped — which still avoids *fetching*
+/// the rows that cannot match, though it does not yet stop early.
+///
+/// The index narrows candidates; it never decides. The original predicate is
+/// still applied by the Filter above this node, so an encoding collision costs
+/// a wasted row fetch and never a wrong answer. See decision 021.
+class IndexScan : public Operator {
+public:
+    IndexScan(std::vector<Row> rows, std::vector<std::string> columns, std::string index,
+              std::string table, bool exact, std::size_t candidates)
+        : rows_(std::move(rows)), columns_(std::move(columns)), index_(std::move(index)),
+          table_(std::move(table)), exact_(exact), candidates_(candidates) {}
+
+    Status next(Row* out, bool* has_row) override {
+        if (at_ >= rows_.size()) {
+            *has_row = false;
+            return Status::ok();
+        }
+        *out = rows_[at_++];
+        *has_row = true;
+        return Status::ok();
+    }
+
+    const std::vector<std::string>& columns() const override { return columns_; }
+
+    std::string describe(int indent) const override {
+        return std::string(indent * 2, ' ') + "IndexScan " + index_ + " on " + table_ + "  (" +
+               (exact_ ? "seek" : "range") + ", " + std::to_string(candidates_) + " of " +
+               std::to_string(candidates_) + " candidates fetched)";
+    }
+
+private:
+    std::vector<Row> rows_;
+    std::vector<std::string> columns_;
+    std::string index_;
+    std::string table_;
+    bool exact_;
+    std::size_t candidates_;
     std::size_t at_ = 0;
 };
 
@@ -594,6 +644,92 @@ Status validate_columns(const Expr& expr, const TableDef* table) {
     return Status::ok(); // a literal refers to nothing
 }
 
+/// A predicate the planner can answer with an index: one indexed column,
+/// compared against a constant.
+struct IndexPlan {
+    IndexDef index;
+    BinaryOperator op = BinaryOperator::Equal;
+    Value constant;
+};
+
+/// Finds `column OP literal` (or `literal OP column`) anywhere in the
+/// conjunctive part of a predicate, against a column that has an index.
+///
+/// Only `AND` is descended into: under `OR`, a row can satisfy the predicate
+/// without satisfying either branch's index lookup, so using one branch's
+/// index would lose rows.
+bool find_index_plan(const Expr& expr, const TableDef& table, const std::vector<IndexDef>& indexes,
+                     IndexPlan* out) {
+    const auto* binary = std::get_if<BinaryExpr>(&expr.node);
+    if (binary == nullptr) {
+        return false;
+    }
+
+    if (binary->op == BinaryOperator::And) {
+        return find_index_plan(*binary->left, table, indexes, out) ||
+               find_index_plan(*binary->right, table, indexes, out);
+    }
+
+    BinaryOperator op = binary->op;
+    const ColumnRef* column = std::get_if<ColumnRef>(&binary->left->node);
+    const Literal* literal = std::get_if<Literal>(&binary->right->node);
+    if (column == nullptr || literal == nullptr) {
+        // `500 = a` means the same as `a = 500`, with the comparison mirrored.
+        column = std::get_if<ColumnRef>(&binary->right->node);
+        literal = std::get_if<Literal>(&binary->left->node);
+        if (column == nullptr || literal == nullptr) {
+            return false;
+        }
+        switch (op) {
+        case BinaryOperator::Less:
+            op = BinaryOperator::Greater;
+            break;
+        case BinaryOperator::LessEqual:
+            op = BinaryOperator::GreaterEqual;
+            break;
+        case BinaryOperator::Greater:
+            op = BinaryOperator::Less;
+            break;
+        case BinaryOperator::GreaterEqual:
+            op = BinaryOperator::LessEqual;
+            break;
+        default:
+            break;
+        }
+    }
+
+    switch (op) {
+    case BinaryOperator::Equal:
+    case BinaryOperator::Less:
+    case BinaryOperator::LessEqual:
+    case BinaryOperator::Greater:
+    case BinaryOperator::GreaterEqual:
+        break;
+    default:
+        return false; // `<>` matches nearly everything; an index would not help
+    }
+
+    // A null constant never matches anything under three-valued logic, so
+    // there is nothing for an index to find.
+    if (literal->value.is_null()) {
+        return false;
+    }
+
+    const int position = table.column_index(column->name);
+    if (position < 0) {
+        return false;
+    }
+    for (const IndexDef& def : indexes) {
+        if (def.column == position) {
+            out->index = def;
+            out->op = op;
+            out->constant = literal->value;
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Loads every live row of a table, with its row id.
 Status load_table(Transaction& txn, const TableDef& def, std::vector<Row>* rows,
                   std::vector<RowId>* ids) {
@@ -622,7 +758,128 @@ Status load_table(Transaction& txn, const TableDef& def, std::vector<Row>* rows,
     return Status::ok();
 }
 
+/// Fetches the rows an index plan points at.
+Status load_via_index(Transaction& txn, const TableDef& table, const IndexPlan& plan,
+                      std::vector<Row>* rows, bool* exact) {
+    rows->clear();
+    *exact = plan.op == BinaryOperator::Equal;
+
+    const std::string wanted = encode_index_value(plan.constant);
+    const std::string prefix =
+        *exact ? index_seek_key(plan.index.id, wanted) : index_range_start(plan.index.id);
+
+    std::vector<std::pair<std::string, std::string>> entries;
+    if (Status s = txn.scan_prefix(prefix, &entries); !s) {
+        return s;
+    }
+
+    for (const auto& [key, value] : entries) {
+        (void)value;
+        IndexId which = 0;
+        std::string encoded;
+        RowId row_id = 0;
+        if (!decode_index_entry(key, &which, &encoded, &row_id) || which != plan.index.id) {
+            return Status::corruption("malformed entry in index '" + plan.index.name + "'");
+        }
+
+        if (!*exact) {
+            // Compare encoded forms, which is exactly the ordering the index
+            // is built on — so the bound test and the key order cannot drift
+            // apart.
+            const int c = encoded.compare(wanted);
+            const bool keep = (plan.op == BinaryOperator::Less && c < 0) ||
+                              (plan.op == BinaryOperator::LessEqual && c <= 0) ||
+                              (plan.op == BinaryOperator::Greater && c > 0) ||
+                              (plan.op == BinaryOperator::GreaterEqual && c >= 0);
+            if (!keep) {
+                continue;
+            }
+        }
+
+        std::string stored;
+        if (Status s = txn.get(as_bytes(row_key(table.id, row_id)), &stored); !s) {
+            if (s.code() == Code::NotFound) {
+                return Status::corruption("index '" + plan.index.name + "' points at row " +
+                                          std::to_string(row_id) + ", which does not exist");
+            }
+            return s;
+        }
+        Row row;
+        if (!decode_row(as_bytes(stored), &row)) {
+            return Status::corruption("malformed row reached through index '" + plan.index.name +
+                                      "'");
+        }
+        rows->push_back(std::move(row));
+    }
+    return Status::ok();
+}
+
 } // namespace
+
+Status verify_indexes(Transaction& txn) {
+    Catalog catalog(txn);
+    std::vector<IndexDef> indexes;
+    if (Status s = catalog.all_indexes(&indexes); !s) {
+        return s;
+    }
+
+    for (const IndexDef& def : indexes) {
+        TableDef table;
+        if (Status s = catalog.lookup(def.table, &table); !s) {
+            return Status::corruption("index '" + def.name + "' names table '" + def.table +
+                                      "', which does not exist");
+        }
+
+        std::vector<Row> rows;
+        std::vector<RowId> ids;
+        if (Status s = load_table(txn, table, &rows, &ids); !s) {
+            return s;
+        }
+
+        // Forward: every row has the entry it should have.
+        std::set<std::string> expected;
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const auto column = static_cast<std::size_t>(def.column);
+            const Value v = column < rows[i].size() ? rows[i][column] : Value::null();
+            expected.insert(index_entry_key(def.id, encode_index_value(v), ids[i]));
+        }
+
+        std::vector<std::pair<std::string, std::string>> entries;
+        if (Status s = txn.scan_prefix(index_range_start(def.id), &entries); !s) {
+            return s;
+        }
+
+        std::set<std::string> present;
+        for (const auto& [key, value] : entries) {
+            (void)value;
+            present.insert(key);
+        }
+
+        for (const std::string& key : expected) {
+            if (present.find(key) == present.end()) {
+                IndexId which = 0;
+                std::string encoded;
+                RowId row_id = 0;
+                decode_index_entry(key, &which, &encoded, &row_id);
+                return Status::corruption("index '" + def.name + "' is missing row " +
+                                          std::to_string(row_id));
+            }
+        }
+        // Backward: no entry points at anything that is not there. This is the
+        // direction that catches a stale entry left behind by an update.
+        for (const std::string& key : present) {
+            if (expected.find(key) == expected.end()) {
+                IndexId which = 0;
+                std::string encoded;
+                RowId row_id = 0;
+                decode_index_entry(key, &which, &encoded, &row_id);
+                return Status::corruption("index '" + def.name + "' has a stale entry for row " +
+                                          std::to_string(row_id));
+            }
+        }
+    }
+    return Status::ok();
+}
 
 Status Executor::execute(const Statement& statement, ResultSet* out) {
     *out = ResultSet{};
@@ -631,6 +888,12 @@ Status Executor::execute(const Statement& statement, ResultSet* out) {
     }
     if (const auto* drop = std::get_if<DropTable>(&statement)) {
         return execute_drop(*drop, out);
+    }
+    if (const auto* create = std::get_if<CreateIndex>(&statement)) {
+        return execute_create_index(*create, out);
+    }
+    if (const auto* drop = std::get_if<DropIndex>(&statement)) {
+        return execute_drop_index(*drop, out);
     }
     if (const auto* insert = std::get_if<Insert>(&statement)) {
         return execute_insert(*insert, out);
@@ -667,6 +930,25 @@ Status Executor::execute_drop(const DropTable& statement, ResultSet* out) {
     return Status::ok();
 }
 
+Status Executor::execute_create_index(const CreateIndex& statement, ResultSet* out) {
+    Catalog catalog(*txn_);
+    IndexDef def;
+    if (Status s = catalog.create_index(statement, &def); !s) {
+        return s;
+    }
+    out->rows_affected = 0;
+    return Status::ok();
+}
+
+Status Executor::execute_drop_index(const DropIndex& statement, ResultSet* out) {
+    Catalog catalog(*txn_);
+    if (Status s = catalog.drop_index(statement); !s) {
+        return s;
+    }
+    out->rows_affected = 0;
+    return Status::ok();
+}
+
 Status Executor::execute_insert(const Insert& statement, ResultSet* out) {
     Catalog catalog(*txn_);
     TableDef def;
@@ -690,6 +972,11 @@ Status Executor::execute_insert(const Insert& statement, ResultSet* out) {
             }
             targets.push_back(index);
         }
+    }
+
+    std::vector<IndexDef> indexes;
+    if (Status s = catalog.indexes_for(def.id, &indexes); !s) {
+        return s;
     }
 
     for (const std::vector<ExprPtr>& source : statement.rows) {
@@ -716,9 +1003,14 @@ Status Executor::execute_insert(const Insert& statement, ResultSet* out) {
             }
         }
 
-        const std::string key = row_key(def.id, def.next_row_id++);
+        const RowId row_id = def.next_row_id++;
+        const std::string key = row_key(def.id, row_id);
         const std::string encoded = encode_row(row);
         if (Status s = txn_->put(as_bytes(key), as_bytes(encoded)); !s) {
+            return s;
+        }
+        // Same transaction as the row, so the two can never be half-applied.
+        if (Status s = index_row(*txn_, def, indexes, row_id, row); !s) {
             return s;
         }
         ++out->rows_affected;
@@ -746,17 +1038,40 @@ Status Executor::execute_select(const Select& statement, ResultSet* out) {
         }
         table = &def;
 
-        std::vector<Row> rows;
-        std::vector<RowId> ids;
-        if (Status s = load_table(*txn_, def, &rows, &ids); !s) {
-            return s;
-        }
         std::vector<std::string> names;
         for (const ColumnDef& column : def.columns) {
             names.push_back(column.name);
         }
-        root =
-            std::make_unique<SeqScan>(std::move(rows), std::move(ids), std::move(names), def.name);
+
+        // The first real planning decision in the project: is there an index
+        // that answers part of this WHERE clause?
+        std::vector<IndexDef> indexes;
+        if (Status s = catalog.indexes_for(def.id, &indexes); !s) {
+            return s;
+        }
+
+        IndexPlan plan;
+        const bool usable = statement.where != nullptr && !indexes.empty() &&
+                            find_index_plan(*statement.where, def, indexes, &plan);
+
+        if (usable) {
+            std::vector<Row> rows;
+            bool exact = false;
+            if (Status s = load_via_index(*txn_, def, plan, &rows, &exact); !s) {
+                return s;
+            }
+            const std::size_t fetched = rows.size();
+            root = std::make_unique<IndexScan>(std::move(rows), std::move(names), plan.index.name,
+                                               def.name, exact, fetched);
+        } else {
+            std::vector<Row> rows;
+            std::vector<RowId> ids;
+            if (Status s = load_table(*txn_, def, &rows, &ids); !s) {
+                return s;
+            }
+            root = std::make_unique<SeqScan>(std::move(rows), std::move(ids), std::move(names),
+                                             def.name);
+        }
     }
 
     // Resolve every column reference before running anything, so that a query
@@ -843,6 +1158,11 @@ Status Executor::execute_update(const Update& statement, ResultSet* out) {
         }
     }
 
+    std::vector<IndexDef> indexes;
+    if (Status s = catalog.indexes_for(def.id, &indexes); !s) {
+        return s;
+    }
+
     std::vector<Row> rows;
     std::vector<RowId> ids;
     if (Status s = load_table(*txn_, def, &rows, &ids); !s) {
@@ -880,9 +1200,19 @@ Status Executor::execute_update(const Update& statement, ResultSet* out) {
             }
         }
 
+        // Retract the old entries before writing the new ones: an update that
+        // changed an indexed column would otherwise leave the old value
+        // pointing at this row forever.
+        if (Status s = unindex_row(*txn_, def, indexes, ids[r], rows[r]); !s) {
+            return s;
+        }
+
         const std::string key = row_key(def.id, ids[r]);
         const std::string encoded = encode_row(updated);
         if (Status s = txn_->put(as_bytes(key), as_bytes(encoded)); !s) {
+            return s;
+        }
+        if (Status s = index_row(*txn_, def, indexes, ids[r], updated); !s) {
             return s;
         }
         ++out->rows_affected;
@@ -905,6 +1235,11 @@ Status Executor::execute_delete(const Delete& statement, ResultSet* out) {
         }
     }
 
+    std::vector<IndexDef> indexes;
+    if (Status s = catalog.indexes_for(def.id, &indexes); !s) {
+        return s;
+    }
+
     std::vector<Row> rows;
     std::vector<RowId> ids;
     if (Status s = load_table(*txn_, def, &rows, &ids); !s) {
@@ -921,6 +1256,9 @@ Status Executor::execute_delete(const Delete& statement, ResultSet* out) {
             if (!verdict.is_true()) {
                 continue;
             }
+        }
+        if (Status s = unindex_row(*txn_, def, indexes, ids[r], rows[r]); !s) {
+            return s;
         }
         const std::string key = row_key(def.id, ids[r]);
         if (Status s = txn_->remove(as_bytes(key)); !s) {

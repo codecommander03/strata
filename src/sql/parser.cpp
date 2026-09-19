@@ -203,10 +203,12 @@ std::optional<Statement> parse_statement(std::string_view sql, ParseError* error
 
 bool Parser::statement(Statement* out, ParseError* error) {
     if (match(TokenType::Create)) {
-        return create_table(out, error);
+        // CREATE is followed by what is being created, so the branch happens
+        // here rather than inside create_table.
+        return check(TokenType::Index) ? create_index(out, error) : create_table(out, error);
     }
     if (match(TokenType::Drop)) {
-        return drop_table(out, error);
+        return check(TokenType::Index) ? drop_index(out, error) : drop_table(out, error);
     }
     if (match(TokenType::Insert)) {
         return insert(out, error);
@@ -310,6 +312,61 @@ bool Parser::drop_table(Statement* out, ParseError* error) {
         statement.if_exists = true;
     }
     if (!expect_identifier(&statement.table, error)) {
+        return false;
+    }
+    *out = std::move(statement);
+    return true;
+}
+
+bool Parser::create_index(Statement* out, ParseError* error) {
+    CreateIndex statement;
+    if (!expect(TokenType::Index, error)) {
+        return false;
+    }
+    if (check(TokenType::If) && peek(1).type == TokenType::Not &&
+        peek(2).type == TokenType::Exists) {
+        index_ += 3;
+        statement.if_not_exists = true;
+    }
+    if (!expect_identifier(&statement.name, error)) {
+        return false;
+    }
+    if (!expect(TokenType::On, error)) {
+        return false;
+    }
+    if (!expect_identifier(&statement.table, error)) {
+        return false;
+    }
+    if (!expect(TokenType::LParen, error)) {
+        return false;
+    }
+    if (!expect_identifier(&statement.column, error)) {
+        return false;
+    }
+    // Composite indexes need a tuple encoding and a planner that understands
+    // prefix matching. Reject the syntax rather than silently indexing only
+    // the first column.
+    if (check(TokenType::Comma)) {
+        *error = ParseError{"composite indexes are not supported; name one column", peek().loc};
+        return false;
+    }
+    if (!expect(TokenType::RParen, error)) {
+        return false;
+    }
+    *out = std::move(statement);
+    return true;
+}
+
+bool Parser::drop_index(Statement* out, ParseError* error) {
+    DropIndex statement;
+    if (!expect(TokenType::Index, error)) {
+        return false;
+    }
+    if (check(TokenType::If) && peek(1).type == TokenType::Exists) {
+        index_ += 2;
+        statement.if_exists = true;
+    }
+    if (!expect_identifier(&statement.name, error)) {
         return false;
     }
     *out = std::move(statement);

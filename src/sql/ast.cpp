@@ -161,6 +161,10 @@ std::string statement_kind(const Statement& statement) {
                 return "CREATE TABLE";
             } else if constexpr (std::is_same_v<T, DropTable>) {
                 return "DROP TABLE";
+            } else if constexpr (std::is_same_v<T, CreateIndex>) {
+                return "CREATE INDEX";
+            } else if constexpr (std::is_same_v<T, DropIndex>) {
+                return "DROP INDEX";
             } else if constexpr (std::is_same_v<T, Insert>) {
                 return "INSERT";
             } else if constexpr (std::is_same_v<T, Select>) {

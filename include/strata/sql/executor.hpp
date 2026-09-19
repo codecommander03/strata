@@ -56,6 +56,16 @@ public:
 
 using OperatorPtr = std::unique_ptr<Operator>;
 
+/// Cross-checks every index against its table, in both directions: every index
+/// entry must point at a row that exists and whose column value re-encodes to
+/// that entry, and every row must have an entry in every index on its table.
+///
+/// This is the counterpart to `BTree::verify_integrity`. A B+tree that is
+/// internally consistent can still be indexed by a structure that disagrees
+/// with it, and an index that disagrees with its table returns confidently
+/// wrong answers that no query-level test would catch.
+Status verify_indexes(Transaction& txn);
+
 /// Runs parsed statements against a transaction.
 class Executor {
 public:
@@ -66,6 +76,8 @@ public:
 private:
     Status execute_create(const CreateTable& statement, ResultSet* out);
     Status execute_drop(const DropTable& statement, ResultSet* out);
+    Status execute_create_index(const CreateIndex& statement, ResultSet* out);
+    Status execute_drop_index(const DropIndex& statement, ResultSet* out);
     Status execute_insert(const Insert& statement, ResultSet* out);
     Status execute_select(const Select& statement, ResultSet* out);
     Status execute_update(const Update& statement, ResultSet* out);

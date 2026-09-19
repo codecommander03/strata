@@ -5,37 +5,7 @@
 #include <cstring>
 
 namespace strata::sql {
-namespace {
-
-void put_be32(std::string* out, std::uint32_t v) {
-    for (int i = 3; i >= 0; --i) {
-        out->push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
-    }
-}
-
-void put_be64(std::string* out, std::uint64_t v) {
-    for (int i = 7; i >= 0; --i) {
-        out->push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
-    }
-}
-
-std::uint32_t read_be32(const unsigned char* p) {
-    std::uint32_t v = 0;
-    for (int i = 0; i < 4; ++i) {
-        v = (v << 8) | p[i];
-    }
-    return v;
-}
-
-std::uint64_t read_be64(const unsigned char* p) {
-    std::uint64_t v = 0;
-    for (int i = 0; i < 8; ++i) {
-        v = (v << 8) | p[i];
-    }
-    return v;
-}
-
-} // namespace
+// Byte-order helpers live in record.hpp: index_catalog.cpp needs them too.
 
 // ---------------------------------------------------------------------------
 // Keys
@@ -61,6 +31,42 @@ std::string table_range_start(TableId table) {
 bool key_belongs_to_table(const std::string& key, TableId table) {
     const std::string prefix = table_range_start(table);
     return key.size() == prefix.size() + 8 && key.compare(0, prefix.size(), prefix) == 0;
+}
+
+std::string index_sequence_key() { return std::string(1, kIndexPrefix); }
+
+std::string index_catalog_key(const std::string& name) {
+    return std::string(1, kIndexPrefix) + name;
+}
+
+std::string index_range_start(IndexId index) {
+    std::string key(1, kIndexEntryPrefix);
+    put_be32(&key, index);
+    return key;
+}
+
+std::string index_seek_key(IndexId index, const std::string& encoded_value) {
+    return index_range_start(index) + encoded_value;
+}
+
+std::string index_entry_key(IndexId index, const std::string& encoded_value, RowId row) {
+    std::string key = index_seek_key(index, encoded_value);
+    put_be64(&key, row);
+    return key;
+}
+
+bool decode_index_entry(const std::string& key, IndexId* index, std::string* encoded_value,
+                        RowId* row) {
+    // 1 prefix byte + 4 index id + at least one tag byte + 8 row id.
+    if (key.size() < 14 || key[0] != kIndexEntryPrefix) {
+        return false;
+    }
+    const auto* p = reinterpret_cast<const unsigned char*>(key.data());
+    *index = read_be32(p + 1);
+    const std::size_t value_len = key.size() - 5 - 8;
+    encoded_value->assign(key, 5, value_len);
+    *row = read_be64(p + 5 + value_len);
+    return true;
 }
 
 bool decode_row_key(const std::string& key, TableId* table, RowId* row) {
