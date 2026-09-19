@@ -57,7 +57,10 @@ thing" that leaves a repository unfinished.
   needed to demonstrate what stage 4 set out to demonstrate.
 - **ORDER BY over a projected alias.** Sorting happens before projection, so
   `ORDER BY` can only name a table column today.
-- **Secondary indexes.** Every query is a full scan. The B+tree is right there.
+- ~~**Secondary indexes.**~~ **Promoted to stage 7** on 2026-09-19. Stage 6
+  measured the cost of their absence at 29x slower than SQLite on a
+  selective predicate, which is what moved it off this list. The rule held:
+  it sat here unbuilt until stage 6 shipped. See `PLAN.md`.
 - **A cost-based optimiser.** Stage 3's planner will be rule-based. Statistics,
   cardinality estimation and join ordering are a separate discipline.
 - **Transactions spanning statements in the playground.** `BEGIN` / `COMMIT`

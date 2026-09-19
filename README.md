@@ -47,6 +47,10 @@ pager, the write-ahead log, the parser and the executor are all here.
 > **Status: 5½ of 6 stages complete.** Everything below works and is tested.
 > The half is a public URL for the playground — it builds and runs, it just
 > isn't deployed yet.
+>
+> **Next: [stage 7, secondary indexes](docs/PLAN.md).** Stage 6 measured the
+> cost of not having them; that number is the reason they're now on the plan
+> rather than on the someday list.
 
 ---
 
@@ -402,7 +406,9 @@ is in [FUTURE.md](docs/FUTURE.md).
 
 - **Joins, aggregates, `GROUP BY`, subqueries.** The SQL subset is deliberately
   small.
-- **Secondary indexes.** Every query is a full scan.
+- **Secondary indexes** — *next up, [stage 7](docs/PLAN.md)*. Every query is a
+  full scan today. Stage 6 measured what that costs, and the 29× above is why
+  this moved off the someday list and onto the plan.
 - **Streaming scans.** A query's working set is the size of the table, not the
   size of the result — see the 29× above.
 - **Page-cache eviction.** The cache grows to the size of the database.

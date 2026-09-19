@@ -119,6 +119,58 @@ machines. Where SQLite wins, it says by how much and why. Evidence below.
 
 ---
 
+## Stage 7 — Secondary indexes
+
+**Added 2026-09-19, after stage 6 measured what the absence of them costs.**
+
+The original six stages are done, so the rule in `FUTURE.md` — add freely, act
+only once stage 6 ships — now permits this. It is promoted out of that file
+rather than invented here: stage 6 turned "every query is a full scan" from a
+known gap into a measured one, at **29x slower than SQLite** on a selective
+predicate, and that number is the reason this is stage 7 instead of staying on
+the list.
+
+`CREATE INDEX name ON table(column)`, `DROP INDEX name`, and a planner that
+uses them.
+
+- **Order-preserving value encoding.** An index key must sort in byte order
+  exactly as the value sorts in SQL order. Text is already there; integers need
+  the sign bit flipped before big-endian encoding, or `-1` sorts after `1`; and
+  IEEE-754 doubles need the sign bit flipped for positives and every bit
+  inverted for negatives. This is the part that can be subtly wrong: equality
+  lookups keep working while range scans quietly return the wrong rows.
+- **A third key namespace.** `0x03 index_id encoded_value row_id` mapping to an
+  empty value, alongside the existing `0x01` catalog and `0x02` rows. The row
+  id goes *in* the key rather than the value, so duplicate values are adjacent
+  entries and there is no bucket to manage.
+- **Maintenance inside the writing transaction.** Every `INSERT`, `UPDATE` and
+  `DELETE` updates every index on the table, in the same transaction, under the
+  same MVCC rules.
+- **The first real planning decision.** `execute_select` always builds a
+  `SeqScan` today. It must recognise `col = literal` and `col > literal`
+  against an indexed column, emit an `IndexScan`, and say which it chose in the
+  plan — so the playground shows the choice being made.
+
+**Gate** — [ ] **NOT PASSED.** Three things, and the first is the one that
+matters:
+
+1. **An index that disagrees with its table is detected, not served.**
+   `verify_indexes()` walks every index entry and checks it against the heap,
+   and every entry in the heap against the index — the same contract
+   `verify_integrity()` provides for the tree. A test builds a table, corrupts
+   one index entry by hand, and asserts the check fails. Without this, a drifted
+   index returns confidently wrong answers and nothing in the suite notices.
+2. **New sqllogictest cases** covering equality, range, `NULL` handling and
+   duplicate values through an index, with the *same expected output* as the
+   unindexed query. An index that changes an answer is a bug, so the corpus
+   should not be able to tell whether one exists.
+3. **A benchmark of the same query with and without the index**, published in
+   `BENCHMARKS.md`. Stage 6 says the gap is 29x and predicts an index scan
+   closes most of it for selective predicates; that prediction gets a number or
+   the claim is withdrawn.
+
+---
+
 ## Evidence for the gates ticked above
 
 ### Stage 1 — 2026-09-19
